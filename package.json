@@ -5,6 +5,8 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
+    "live": "node server/cloudflareTunnel.js",
+    "tunnel": "node server/cloudflareTunnel.js",
     "start:public": "node server/server.js --tunnel",
     "share": "node server/tunnel.js",
     "server": "node server/server.js",
