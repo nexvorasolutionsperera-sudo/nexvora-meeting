@@ -1,0 +1,27 @@
+{
+  "name": "nexvorameeting",
+  "version": "1.0.0",
+  "description": "NexvoraMeeting - Advanced Real-Time Video Conferencing & Online Class Platform",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "start:public": "node server/server.js --tunnel",
+    "share": "node server/tunnel.js",
+    "server": "node server/server.js",
+    "client": "npm --prefix client run dev",
+    "build:client": "npm --prefix client run build",
+    "build": "npm --prefix client run build"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "google-auth-library": "^11.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "localtunnel": "^2.0.2",
+    "mongoose": "^9.11.4",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0"
+  }
+}
