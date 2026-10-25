@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Mic, MicOff, VideoOff, Hand, Pin, Shield, GraduationCap } from 'lucide-react';
+import { Mic, MicOff, VideoOff, Hand, Pin, Shield, GraduationCap, ScreenShare, Volume2 } from 'lucide-react';
 
 export default function VideoTile({
   participant,
@@ -10,23 +10,30 @@ export default function VideoTile({
   mirror = false
 }) {
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
     }
-  }, [stream]);
+    if (audioRef.current && stream && !isLocal) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [stream, isLocal]);
 
   const hasVideo = isLocal 
     ? (participant.videoEnabled && stream && stream.getVideoTracks().some(t => t.enabled))
-    : (participant.videoEnabled && stream);
+    : (participant.videoEnabled && stream && stream.getVideoTracks().length > 0);
+
+  const isSpeaking = participant.isSpeaking;
 
   return (
-    <div className={`relative w-full h-full rounded-2xl overflow-hidden bg-slate-900 border transition-all ${
-      participant.handRaised 
-        ? 'ring-2 ring-amber-400 border-amber-400' 
-        : participant.audioEnabled 
-          ? 'border-slate-800' 
+    <div className={`relative w-full h-full min-h-[180px] rounded-2xl overflow-hidden bg-slate-900 border transition-all duration-200 ${
+      isSpeaking
+        ? 'ring-4 ring-emerald-500 border-emerald-500 shadow-xl shadow-emerald-500/25'
+        : participant.handRaised 
+          ? 'ring-2 ring-amber-400 border-amber-400' 
           : 'border-slate-800'
     } flex items-center justify-center group shadow-md`}>
       
@@ -43,6 +50,15 @@ export default function VideoTile({
         />
       )}
 
+      {/* Dedicated Remote Audio Output (ensures audio plays 100% reliably in background for 100+ users) */}
+      {!isLocal && stream && (
+        <audio
+          ref={audioRef}
+          autoPlay
+          playsInline
+        />
+      )}
+
       {/* Camera Off Avatar Placeholder */}
       {!hasVideo && (
         <div className="flex flex-col items-center justify-center p-4">
@@ -50,15 +66,22 @@ export default function VideoTile({
             <img
               src={participant.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${participant.name}`}
               alt={participant.name}
-              className="w-20 h-20 sm:w-24 sm:h-24 rounded-full ring-4 ring-slate-800 object-cover shadow-xl bg-slate-800"
+              className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full ring-4 ${
+                isSpeaking ? 'ring-emerald-500 animate-pulse' : 'ring-slate-800'
+              } object-cover shadow-xl bg-slate-800`}
             />
+            {isSpeaking && (
+              <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-white p-1 rounded-full shadow-lg animate-bounce">
+                <Volume2 className="w-3.5 h-3.5" />
+              </div>
+            )}
             {participant.handRaised && (
               <div className="absolute -top-1 -right-1 bg-amber-500 text-white p-1.5 rounded-full shadow-lg animate-bounce">
                 <Hand className="w-4 h-4 fill-white" />
               </div>
             )}
           </div>
-          <span className="mt-3 text-sm font-semibold text-slate-200">
+          <span className="mt-2.5 text-xs sm:text-sm font-semibold text-slate-200 max-w-[150px] truncate text-center">
             {participant.name} {isLocal && '(You)'}
           </span>
         </div>
@@ -72,24 +95,39 @@ export default function VideoTile({
         </div>
       )}
 
-      {/* Top Right Pin Button */}
-      {onPin && (
-        <button
-          type="button"
-          onClick={onPin}
-          title={isPinned ? 'Unpin video' : 'Pin video'}
-          className={`absolute top-3 right-3 p-1.5 rounded-xl backdrop-blur-md transition-all ${
-            isPinned 
-              ? 'bg-blue-600 text-white' 
-              : 'bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-black/70'
-          }`}
-        >
-          <Pin className="w-3.5 h-3.5" />
-        </button>
+      {/* Speaking Indicator Top Banner */}
+      {isSpeaking && (
+        <div className="absolute top-3 left-3 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600/90 text-white text-[11px] font-bold backdrop-blur-md shadow-md animate-pulse">
+          <Volume2 className="w-3 h-3" />
+          <span>Speaking</span>
+        </div>
       )}
 
+      {/* Top Right Controls */}
+      <div className="absolute top-3 right-3 flex items-center gap-1">
+        {participant.screenSharing && (
+          <span className="px-2 py-0.5 rounded-lg bg-blue-600/90 text-white text-[10px] font-semibold flex items-center gap-1 backdrop-blur-md shadow-sm">
+            <ScreenShare className="w-3 h-3" /> Screen
+          </span>
+        )}
+        {onPin && (
+          <button
+            type="button"
+            onClick={onPin}
+            title={isPinned ? 'Unpin video' : 'Pin video'}
+            className={`p-1.5 rounded-xl backdrop-blur-md transition-all ${
+              isPinned 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-black/70'
+            }`}
+          >
+            <Pin className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Bottom Info Bar */}
-      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+      <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-black/60 backdrop-blur-md text-white text-xs font-medium max-w-[80%] truncate">
           {participant.isHost && (
             <span className="bg-blue-600 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded flex items-center gap-1">

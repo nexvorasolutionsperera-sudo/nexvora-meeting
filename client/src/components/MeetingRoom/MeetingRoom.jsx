@@ -66,6 +66,12 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   const [messages, setMessages] = useState([]);
   const [reactions, setReactions] = useState([]);
 
+  // Active Speaker & 100+ Large Meeting Scale
+  const [activeSpeakerName, setActiveSpeakerName] = useState('');
+  const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+  const [gridPage, setGridPage] = useState(1);
+  const audioContextRef = useRef(null);
+
   // Active Drawers / Modals
   const [activeDrawer, setActiveDrawer] = useState(null); // 'participants' | 'chat' | 'security'
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -113,6 +119,9 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   }, [meetingId]);
 
   const cleanUp = () => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => t.stop());
     }
@@ -138,9 +147,15 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   // Initialize Media & Socket Connection
   const initMeeting = async () => {
     try {
-      // 1. Get user media with resolution options
+      // 1. Get user media with high-fidelity 48kHz Opus audio profile (AEC, AGC, NS)
       const constraints = {
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 48000
+        },
         video: {
           width: cameraResolution === '1080p' ? 1920 : cameraResolution === '720p' ? 1280 : 640,
           height: cameraResolution === '1080p' ? 1080 : cameraResolution === '720p' ? 720 : 360,
@@ -154,7 +169,10 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
       } catch (mediaErr) {
         console.warn('Full webcam/mic unavailable, trying audio-only fallback:', mediaErr.message);
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, 
+            video: false 
+          });
           setIsVideoOff(true);
         } catch (audioErr) {
           console.warn('Audio/video unavailable, joining in spectator/virtual mode:', audioErr.message);
@@ -166,6 +184,9 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
 
       localStreamRef.current = stream;
       setLocalStream(stream);
+
+      // Setup Web Audio API Analyzer for active speaker detection
+      setupLocalAudioAnalyzer(stream);
 
       // Check user preferences for initial mute
       if (currentUser?.settings?.muteAudioOnJoin) {
@@ -309,6 +330,14 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
         setParticipants(prev => prev.map(p => p.socketId === socketId ? { ...p, handRaised: raised } : p));
       });
 
+      // Active Speaker Broadcast Handler
+      socket.on('participant-speaking-change', ({ socketId, name, isSpeaking }) => {
+        setParticipants(prev => prev.map(p => p.socketId === socketId ? { ...p, isSpeaking } : p));
+        if (isSpeaking) {
+          setActiveSpeakerName(name);
+        }
+      });
+
       // Host Moderation Events
       socket.on('force-mute', () => {
         if (localStreamRef.current) {
@@ -373,6 +402,67 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     } catch (err) {
       console.error('Init meeting error:', err);
       setJoinError('Failed to access camera and microphone or join room.');
+    }
+  };
+
+  // Real-Time Audio Level Analyzer for Active Speaker Detection
+  const setupLocalAudioAnalyzer = (stream) => {
+    try {
+      const audioTrack = stream?.getAudioTracks()[0];
+      if (!audioTrack) return;
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const audioCtx = new AudioCtx();
+      audioContextRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.3;
+      source.connect(analyser);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      let speaking = false;
+      let silenceTimeout = null;
+
+      const checkVolume = () => {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+
+        // If audio above voice threshold and mic not muted
+        if (average > 15 && audioTrack.enabled) {
+          if (!speaking) {
+            speaking = true;
+            setIsLocalSpeaking(true);
+            socketRef.current?.emit('participant-speaking', { isSpeaking: true });
+          }
+          if (silenceTimeout) {
+            clearTimeout(silenceTimeout);
+            silenceTimeout = null;
+          }
+        } else {
+          if (speaking && !silenceTimeout) {
+            silenceTimeout = setTimeout(() => {
+              speaking = false;
+              setIsLocalSpeaking(false);
+              socketRef.current?.emit('participant-speaking', { isSpeaking: false });
+              silenceTimeout = null;
+            }, 500);
+          }
+        }
+      };
+
+      const intervalId = setInterval(checkVolume, 150);
+      return () => clearInterval(intervalId);
+    } catch (e) {
+      console.warn('Audio analyzer init note:', e);
     }
   };
 
@@ -737,11 +827,23 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     audioEnabled: !isAudioMuted,
     videoEnabled: !isVideoOff,
     screenSharing: isScreenSharing,
-    handRaised: isHandRaised
+    handRaised: isHandRaised,
+    isSpeaking: isLocalSpeaking
   };
 
   const remoteParticipants = participants.filter(p => p.socketId !== socketRef.current?.id);
-  const totalParticipantCount = 1 + remoteParticipants.length;
+  const allParticipants = [localParticipant, ...remoteParticipants];
+  const totalParticipantCount = allParticipants.length;
+
+  // Active Screen Sharer (either local or remote)
+  const activeScreenSharer = isScreenSharing 
+    ? localParticipant 
+    : remoteParticipants.find(p => p.screenSharing);
+
+  // Pagination for 100+ Large Meetings
+  const pageSize = 12;
+  const totalPages = Math.max(1, Math.ceil(allParticipants.length / pageSize));
+  const paginatedParticipants = allParticipants.slice((gridPage - 1) * pageSize, gridPage * pageSize);
 
   return (
     <div 
@@ -776,12 +878,25 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
           </div>
         </div>
 
-        {/* Center: Live Timer & Code Badge */}
+        {/* Center: Live Speaker, Timer & Code Badge */}
         <div className="flex items-center gap-2">
+          {activeSpeakerName && (
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-950/80 border border-emerald-600/50 text-emerald-300 text-xs font-bold animate-pulse shadow-md">
+              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Speaking: {activeSpeakerName}</span>
+            </div>
+          )}
+
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-800/80 border border-slate-700/60 text-xs font-mono text-slate-300">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>{formatDuration(meetingDuration)}</span>
           </div>
+
+          <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-950/60 border border-blue-800/60 text-blue-300 text-xs font-semibold">
+            <Users className="w-3.5 h-3.5" />
+            <span>{totalParticipantCount}</span>
+          </div>
+
           <button
             onClick={() => setShowInviteModal(true)}
             className="px-2.5 py-1 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-400 text-xs font-medium flex items-center gap-1.5 transition-colors"
@@ -842,56 +957,101 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
             ))}
           </div>
 
-          {/* Grid Layout Logic */}
-          <div className={`w-full h-full max-w-7xl mx-auto grid gap-3 sm:gap-4 ${
-            totalParticipantCount === 1 
-              ? 'grid-cols-1 max-w-4xl max-h-[75vh]' 
-              : totalParticipantCount === 2 
-                ? 'grid-cols-1 md:grid-cols-2 max-h-[80vh]' 
-                : totalParticipantCount <= 4 
-                  ? 'grid-cols-2 max-h-[85vh]' 
-                  : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4'
-          }`}>
-            
-            {/* Screen Share Tile (if local user is sharing) */}
-            {isScreenSharing && screenStream && (
-              <div className="col-span-full h-full max-h-[70vh] rounded-2xl overflow-hidden bg-black border border-blue-500 shadow-2xl relative">
+          {/* 100+ Attendees Stage / Presentation & Grid Layout */}
+          {activeScreenSharer ? (
+            /* Spotlight Screen Share Stage View (Full HD for 100+ Participants) */
+            <div className="w-full h-full max-w-7xl mx-auto flex flex-col gap-3">
+              {/* Main Presentation View */}
+              <div className="flex-1 rounded-2xl overflow-hidden bg-black border border-blue-500/80 shadow-2xl relative flex items-center justify-center min-h-[50vh]">
                 <video
                   autoPlay
                   playsInline
-                  muted
-                  ref={(el) => { if (el) el.srcObject = screenStream; }}
+                  muted={activeScreenSharer.socketId === socketRef.current?.id}
+                  ref={(el) => {
+                    if (el) {
+                      el.srcObject = activeScreenSharer.socketId === socketRef.current?.id
+                        ? screenStream
+                        : remoteStreams[activeScreenSharer.socketId];
+                    }
+                  }}
                   className="w-full h-full object-contain"
                 />
-                <div className="absolute top-3 left-3 bg-blue-600/90 backdrop-blur-md px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5">
-                  <ScreenShare className="w-3.5 h-3.5" />
-                  <span>You are sharing your screen</span>
+                <div className="absolute top-3 left-3 bg-blue-600/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg">
+                  <ScreenShare className="w-4 h-4" />
+                  <span>
+                    {activeScreenSharer.socketId === socketRef.current?.id 
+                      ? 'You are presenting your screen to everyone' 
+                      : `${activeScreenSharer.name} is sharing screen`}
+                  </span>
                 </div>
               </div>
-            )}
 
-            {/* Local Video Tile */}
-            <VideoTile
-              participant={localParticipant}
-              stream={localStream}
-              isLocal={true}
-              isPinned={pinnedSocketId === 'local'}
-              onPin={() => setPinnedSocketId(pinnedSocketId === 'local' ? null : 'local')}
-              mirror={currentUser?.settings?.mirrorVideo !== false}
-            />
+              {/* Horizontal Filmstrip of Attendees */}
+              <div className="h-28 sm:h-32 flex items-center gap-2 overflow-x-auto pb-1 shrink-0 px-1">
+                {allParticipants.map((p) => (
+                  <div key={p.socketId} className="w-36 h-full shrink-0">
+                    <VideoTile
+                      participant={p}
+                      stream={p.socketId === socketRef.current?.id ? localStream : remoteStreams[p.socketId]}
+                      isLocal={p.socketId === socketRef.current?.id}
+                      isPinned={pinnedSocketId === p.socketId}
+                      onPin={() => setPinnedSocketId(pinnedSocketId === p.socketId ? null : p.socketId)}
+                      mirror={p.socketId === socketRef.current?.id && currentUser?.settings?.mirrorVideo !== false}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            /* Standard / 100+ Large Classroom Grid Layout */
+            <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+              {/* Video Grid */}
+              <div className={`flex-1 grid gap-3 sm:gap-4 ${
+                paginatedParticipants.length === 1 
+                  ? 'grid-cols-1 max-w-4xl max-h-[75vh] mx-auto' 
+                  : paginatedParticipants.length === 2 
+                    ? 'grid-cols-1 md:grid-cols-2 max-h-[80vh]' 
+                    : paginatedParticipants.length <= 4 
+                      ? 'grid-cols-2 max-h-[85vh]' 
+                      : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4'
+              }`}>
+                {paginatedParticipants.map((p) => (
+                  <VideoTile
+                    key={p.socketId}
+                    participant={p}
+                    stream={p.socketId === socketRef.current?.id ? localStream : remoteStreams[p.socketId]}
+                    isLocal={p.socketId === socketRef.current?.id}
+                    isPinned={pinnedSocketId === p.socketId}
+                    onPin={() => setPinnedSocketId(pinnedSocketId === p.socketId ? null : p.socketId)}
+                    mirror={p.socketId === socketRef.current?.id && currentUser?.settings?.mirrorVideo !== false}
+                  />
+                ))}
+              </div>
 
-            {/* Remote Peer Video Tiles */}
-            {remoteParticipants.map((p) => (
-              <VideoTile
-                key={p.socketId}
-                participant={p}
-                stream={remoteStreams[p.socketId]}
-                isLocal={false}
-                isPinned={pinnedSocketId === p.socketId}
-                onPin={() => setPinnedSocketId(pinnedSocketId === p.socketId ? null : p.socketId)}
-              />
-            ))}
-          </div>
+              {/* Pagination Controls for 100+ Participants */}
+              {totalPages > 1 && (
+                <div className="mt-2 py-1.5 flex items-center justify-center gap-3 shrink-0">
+                  <button
+                    disabled={gridPage === 1}
+                    onClick={() => setGridPage(p => Math.max(1, p - 1))}
+                    className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-xs font-semibold"
+                  >
+                    ◀ Prev Page
+                  </button>
+                  <span className="text-xs font-bold text-slate-400">
+                    Page {gridPage} of {totalPages} ({allParticipants.length} Participants)
+                  </span>
+                  <button
+                    disabled={gridPage === totalPages}
+                    onClick={() => setGridPage(p => Math.min(totalPages, p + 1))}
+                    className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-xs font-semibold"
+                  >
+                    Next Page ▶
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Side Drawers */}

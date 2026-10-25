@@ -209,6 +209,20 @@ function setupMeetingSocket(io) {
       }
     });
 
+    // Active Speaker Detection
+    socket.on('participant-speaking', ({ isSpeaking }) => {
+      if (!currentMeetingId) return;
+      const room = rooms.get(currentMeetingId);
+      if (room && room.participants.has(socket.id)) {
+        room.participants.get(socket.id).isSpeaking = isSpeaking;
+        io.to(`meeting_${currentMeetingId}`).emit('participant-speaking-change', {
+          socketId: socket.id,
+          name: room.participants.get(socket.id).name,
+          isSpeaking
+        });
+      }
+    });
+
     // Raise / Lower Hand
     socket.on('toggle-hand', ({ raised }) => {
       if (!currentMeetingId) return;
