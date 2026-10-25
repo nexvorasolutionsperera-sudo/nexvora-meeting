@@ -40,7 +40,7 @@ app.use('/api/admin', adminRoutes);
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
-    platform: 'NexvoraMeeting Zoom Alternative',
+    platform: 'Nexvora Solutions Meeting Platform',
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });

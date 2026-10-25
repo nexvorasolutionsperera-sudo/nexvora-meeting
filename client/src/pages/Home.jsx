@@ -286,7 +286,7 @@ export default function Home({ onStartMeeting, onOpenSchedule, onOpenAuth, onNav
                 3. Accounts & Dashboard
               </h3>
               <ul className="space-y-1.5 text-xs text-slate-600 dark:text-slate-400">
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> Register, Login & Google OAuth</li>
+                <li className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> User Registration & Database Auth</li>
                 <li className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> Schedule future lectures & meetings</li>
                 <li className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> Upcoming meetings & history log</li>
                 <li className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> Personal Meeting Links (PMI)</li>
