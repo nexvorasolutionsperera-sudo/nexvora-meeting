@@ -38,5 +38,6 @@ COPY --from=builder /app/client/dist ./client/dist
 COPY client/public ./client/public
 
 EXPOSE 5000
+EXPOSE 7860
 
 CMD ["node", "server/server.js"]
