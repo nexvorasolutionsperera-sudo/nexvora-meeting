@@ -1,17 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const { readDb, writeDb } = require('../db');
+const { readDb, writeDb, isMongoConnected, models } = require('../db');
 const { authMiddleware, adminMiddleware } = require('../auth');
 
 // All admin routes require admin privileges
 router.use(authMiddleware, adminMiddleware);
 
 // Get Admin Statistics
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
+  let totalUsers = 0;
+  let totalMeetings = 0;
+  let totalReports = 0;
+
+  if (isMongoConnected) {
+    try {
+      totalUsers = await models.User.countDocuments();
+      totalMeetings = await models.Meeting.countDocuments();
+      totalReports = await models.Report.countDocuments();
+    } catch (e) {}
+  }
+
   const db = readDb();
-  const totalUsers = db.users.length;
-  const totalMeetings = db.meetings.length;
-  const totalReports = (db.reports || []).length;
+  if (totalUsers === 0) totalUsers = db.users.length;
+  if (totalMeetings === 0) totalMeetings = db.meetings.length;
+  if (totalReports === 0) totalReports = (db.reports || []).length;
+
   const historyMinutes = (db.meetingHistory || []).reduce((acc, h) => acc + (h.durationMinutes || 0), 0);
 
   res.json({
@@ -20,6 +33,7 @@ router.get('/stats', (req, res) => {
     totalMinutes: historyMinutes + 1420,
     activeMeetings: Math.max(1, db.meetings.filter(m => m.status === 'active').length),
     totalReports,
+    databaseStatus: isMongoConnected ? 'MongoDB Connected' : 'Persistent Storage Active',
     usageData: [
       { day: 'Mon', meetings: 12, minutes: 480 },
       { day: 'Tue', meetings: 19, minutes: 820 },
@@ -32,21 +46,38 @@ router.get('/stats', (req, res) => {
   });
 });
 
-// Get All Users
-router.get('/users', (req, res) => {
+// Get All Users (from MongoDB or Local DB)
+router.get('/users', async (req, res) => {
+  let usersList = [];
   const db = readDb();
-  const cleanUsers = db.users.map(({ passwordHash, ...user }) => {
+
+  if (isMongoConnected) {
+    try {
+      const mongoUsers = await models.User.find({}).lean();
+      if (mongoUsers && mongoUsers.length > 0) {
+        usersList = mongoUsers;
+      }
+    } catch (e) {}
+  }
+
+  if (usersList.length === 0) {
+    usersList = db.users;
+  }
+
+  const cleanUsers = usersList.map(({ passwordHash, ...user }) => {
     const hostedCount = db.meetings.filter(m => m.hostId === user.id).length;
     return {
       ...user,
-      meetingCount: hostedCount
+      meetingCount: hostedCount,
+      authProvider: user.googleId ? 'Google' : 'Email'
     };
   });
+
   res.json(cleanUsers);
 });
 
 // Toggle Block / Unblock User
-router.put('/users/:id/block', (req, res) => {
+router.put('/users/:id/block', async (req, res) => {
   const db = readDb();
   const user = db.users.find(u => u.id === req.params.id);
   if (!user) {
@@ -58,6 +89,13 @@ router.put('/users/:id/block', (req, res) => {
   }
 
   user.isBlocked = !user.isBlocked;
+
+  if (isMongoConnected) {
+    try {
+      await models.User.findOneAndUpdate({ id: req.params.id }, { isBlocked: user.isBlocked });
+    } catch (e) {}
+  }
+
   writeDb(db);
 
   const { passwordHash, ...userClean } = user;
@@ -65,7 +103,7 @@ router.put('/users/:id/block', (req, res) => {
 });
 
 // Update User Role
-router.put('/users/:id/role', (req, res) => {
+router.put('/users/:id/role', async (req, res) => {
   const { role } = req.body;
   if (!['user', 'admin'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
@@ -78,6 +116,13 @@ router.put('/users/:id/role', (req, res) => {
   }
 
   user.role = role;
+
+  if (isMongoConnected) {
+    try {
+      await models.User.findOneAndUpdate({ id: req.params.id }, { role });
+    } catch (e) {}
+  }
+
   writeDb(db);
 
   const { passwordHash, ...userClean } = user;
@@ -85,7 +130,7 @@ router.put('/users/:id/role', (req, res) => {
 });
 
 // Delete User
-router.delete('/users/:id', (req, res) => {
+router.delete('/users/:id', async (req, res) => {
   if (req.params.id === req.user.id) {
     return res.status(400).json({ error: 'You cannot delete your own admin account' });
   }
@@ -96,19 +141,25 @@ router.delete('/users/:id', (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
+  if (isMongoConnected) {
+    try {
+      await models.User.findOneAndDelete({ id: req.params.id });
+    } catch (e) {}
+  }
+
   db.users.splice(idx, 1);
   writeDb(db);
   res.json({ message: 'User deleted successfully' });
 });
 
 // Get Abuse Reports
-router.get('/reports', (req, res) => {
+router.get('/reports', async (req, res) => {
   const db = readDb();
   res.json(db.reports || []);
 });
 
 // Update Report Status
-router.put('/reports/:id/status', (req, res) => {
+router.put('/reports/:id/status', async (req, res) => {
   const { status } = req.body;
   const db = readDb();
   if (!db.reports) db.reports = [];

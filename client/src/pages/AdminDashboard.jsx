@@ -201,9 +201,11 @@ export default function AdminDashboard() {
               <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 dark:border-slate-800">
                 <tr>
                   <th className="py-3 px-4">User</th>
+                  <th className="py-3 px-4">Auth Method</th>
                   <th className="py-3 px-4">Role</th>
                   <th className="py-3 px-4">PMI</th>
                   <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Registered</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -220,6 +222,16 @@ export default function AdminDashboard() {
                         <p className="font-bold text-slate-900 dark:text-white">{u.name}</p>
                         <p className="text-[11px] text-slate-400">{u.email}</p>
                       </div>
+                    </td>
+
+                    <td className="py-3 px-4">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 w-fit ${
+                        u.authProvider === 'Google'
+                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+                          : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                      }`}>
+                        {u.authProvider === 'Google' ? '🌐 Google' : '✉️ Email'}
+                      </span>
                     </td>
 
                     <td className="py-3 px-4">
@@ -244,6 +256,10 @@ export default function AdminDashboard() {
                       }`}>
                         {u.isBlocked ? 'Blocked' : 'Active'}
                       </span>
+                    </td>
+
+                    <td className="py-3 px-4 text-slate-500 text-[11px]">
+                      {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Active'}
                     </td>
 
                     <td className="py-3 px-4 text-right space-x-1">
