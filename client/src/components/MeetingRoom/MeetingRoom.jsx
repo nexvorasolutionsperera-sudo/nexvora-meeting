@@ -23,8 +23,10 @@ const ICE_SERVERS = {
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' }
-  ]
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    { urls: 'stun:openrelay.metered.ca:80' }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
@@ -84,8 +86,22 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   // Refs for WebRTC & Socket
   const socketRef = useRef(null);
   const peersRef = useRef({}); // socketId -> RTCPeerConnection
+  const pendingCandidatesRef = useRef({}); // socketId -> Array of RTCIceCandidateInit
   const localStreamRef = useRef(null);
   const containerRef = useRef(null);
+
+  // Helper to drain any early ICE candidates that arrived before setRemoteDescription
+  const drainCandidateQueue = async (senderSocketId, peer) => {
+    const queue = pendingCandidatesRef.current[senderSocketId] || [];
+    pendingCandidatesRef.current[senderSocketId] = [];
+    for (const cand of queue) {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(cand));
+      } catch (e) {
+        console.warn('Error applying queued ICE candidate:', e);
+      }
+    }
+  };
 
   // Load meeting metadata from server
   useEffect(() => {
@@ -127,6 +143,7 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     }
     Object.values(peersRef.current).forEach(peer => peer.close());
     peersRef.current = {};
+    pendingCandidatesRef.current = {};
     if (socketRef.current) {
       socketRef.current.disconnect();
     }
@@ -147,38 +164,36 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   // Initialize Media & Socket Connection
   const initMeeting = async () => {
     try {
-      // 1. Get user media with high-fidelity 48kHz Opus audio profile (AEC, AGC, NS)
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000
-        },
-        video: {
-          width: cameraResolution === '1080p' ? 1920 : cameraResolution === '720p' ? 1280 : 640,
-          height: cameraResolution === '1080p' ? 1080 : cameraResolution === '720p' ? 720 : 360,
-          facingMode: 'user'
-        }
-      };
-
+      // 1. Acquire camera & mic media with resilient multi-level fallback
       let stream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: {
+            width: { ideal: cameraResolution === '1080p' ? 1920 : cameraResolution === '720p' ? 1280 : 640 },
+            height: { ideal: cameraResolution === '1080p' ? 1080 : cameraResolution === '720p' ? 720 : 360 },
+            facingMode: 'user'
+          }
+        });
       } catch (mediaErr) {
-        console.warn('Full webcam/mic unavailable, trying audio-only fallback:', mediaErr.message);
+        console.warn('Constrained getUserMedia failed, trying unconstrained audio+video:', mediaErr.message);
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, 
-            video: false 
-          });
-          setIsVideoOff(true);
-        } catch (audioErr) {
-          console.warn('Audio/video unavailable, joining in spectator/virtual mode:', audioErr.message);
-          stream = createVirtualStream(currentUser?.name || 'Guest');
-          setIsAudioMuted(true);
-          setIsVideoOff(true);
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        } catch (basicErr) {
+          console.warn('Basic getUserMedia failed, trying audio-only fallback:', basicErr.message);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            setIsVideoOff(true);
+          } catch (audioErr) {
+            console.warn('No physical webcam/mic available, joining with virtual spectator stream:', audioErr.message);
+            stream = createVirtualStream(currentUser?.name || 'Guest');
+            setIsAudioMuted(true);
+            setIsVideoOff(true);
+          }
         }
       }
 
@@ -279,6 +294,7 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
           peersRef.current[socketId].close();
           delete peersRef.current[socketId];
         }
+        delete pendingCandidatesRef.current[socketId];
         setRemoteStreams(prev => {
           const updated = { ...prev };
           delete updated[socketId];
@@ -286,30 +302,52 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
         });
       });
 
-      // WebRTC Signaling Handlers
+      // WebRTC Signaling Handlers with ICE Candidate Queue
       socket.on('signal-offer', async ({ senderSocketId, offer }) => {
-        const peer = initiatePeerConnection(senderSocketId, false);
-        await peer.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        socket.emit('signal-answer', { targetSocketId: senderSocketId, answer });
+        try {
+          const peer = initiatePeerConnection(senderSocketId, false);
+          if (peer.signalingState !== 'stable') {
+            await Promise.all([
+              peer.setLocalDescription({ type: 'rollback' }).catch(() => {})
+            ]);
+          }
+          await peer.setRemoteDescription(new RTCSessionDescription(offer));
+          await drainCandidateQueue(senderSocketId, peer);
+
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          socket.emit('signal-answer', { targetSocketId: senderSocketId, answer });
+        } catch (err) {
+          console.error('Error handling signal-offer:', err);
+        }
       });
 
       socket.on('signal-answer', async ({ senderSocketId, answer }) => {
-        const peer = peersRef.current[senderSocketId];
-        if (peer) {
-          await peer.setRemoteDescription(new RTCSessionDescription(answer));
+        try {
+          const peer = peersRef.current[senderSocketId];
+          if (peer && (peer.signalingState === 'have-local-offer' || peer.signalingState === 'have-remote-pranswer')) {
+            await peer.setRemoteDescription(new RTCSessionDescription(answer));
+            await drainCandidateQueue(senderSocketId, peer);
+          }
+        } catch (err) {
+          console.error('Error handling signal-answer:', err);
         }
       });
 
       socket.on('ice-candidate', async ({ senderSocketId, candidate }) => {
+        if (!candidate) return;
         const peer = peersRef.current[senderSocketId];
-        if (peer && candidate) {
+        if (peer && peer.remoteDescription && peer.remoteDescription.type) {
           try {
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
           } catch (e) {
-            console.error('Error adding ICE candidate', e);
+            console.warn('Error adding ICE candidate:', e);
           }
+        } else {
+          if (!pendingCandidatesRef.current[senderSocketId]) {
+            pendingCandidatesRef.current[senderSocketId] = [];
+          }
+          pendingCandidatesRef.current[senderSocketId].push(candidate);
         }
       });
 
@@ -507,22 +545,39 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     const peer = new RTCPeerConnection(ICE_SERVERS);
     peersRef.current[targetSocketId] = peer;
 
-    // Add local tracks to peer
+    // Add all existing local tracks to peer
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        peer.addTrack(track, localStreamRef.current);
+        try {
+          peer.addTrack(track, localStreamRef.current);
+        } catch (e) {
+          console.warn('Error adding track to peer:', e);
+        }
       });
     }
 
-    // Handle remote tracks
+    // Handle remote tracks: ALWAYS create a new MediaStream instance so React triggers re-render!
     peer.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      if (remoteStream) {
-        setRemoteStreams(prev => ({
+      console.log(`[WebRTC] ontrack received from ${targetSocketId}:`, event.track.kind);
+      setRemoteStreams(prev => {
+        const existingStream = prev[targetSocketId];
+        let newStream;
+        if (existingStream) {
+          const tracks = existingStream.getTracks();
+          if (!tracks.some(t => t.id === event.track.id)) {
+            tracks.push(event.track);
+          }
+          newStream = new MediaStream(tracks);
+        } else {
+          newStream = event.streams && event.streams[0] 
+            ? new MediaStream(event.streams[0].getTracks()) 
+            : new MediaStream([event.track]);
+        }
+        return {
           ...prev,
-          [targetSocketId]: remoteStream
-        }));
-      }
+          [targetSocketId]: newStream
+        };
+      });
     };
 
     // Handle ICE candidates
@@ -535,10 +590,20 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
       }
     };
 
-    // If initiator, create and send offer
+    peer.oniceconnectionstatechange = () => {
+      console.log(`[ICE] state with ${targetSocketId}:`, peer.iceConnectionState);
+      if (peer.iceConnectionState === 'failed') {
+        peer.restartIce();
+      }
+    };
+
+    // If initiator, create and send offer specifying desire to both receive audio & video
     if (isInitiator) {
-      peer.createOffer().then(offer => {
-        peer.setLocalDescription(offer);
+      peer.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      }).then(async (offer) => {
+        await peer.setLocalDescription(offer);
         socketRef.current?.emit('signal-offer', { targetSocketId, offer });
       }).catch(err => console.error('Error creating offer', err));
     }
@@ -546,25 +611,96 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     return peer;
   };
 
-  // Toggle Audio (Mute / Unmute)
-  const toggleAudio = () => {
-    if (localStreamRef.current) {
+  // Toggle Audio (Mute / Unmute) with dynamic track acquisition if missing
+  const toggleAudio = async () => {
+    if (!localStreamRef.current) return;
+
+    let audioTrack = localStreamRef.current.getAudioTracks()[0];
+
+    // If audio track does not exist or has ended, acquire fresh mic permission dynamically
+    if (!audioTrack || audioTrack.readyState === 'ended') {
+      try {
+        const newMicStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        const newTrack = newMicStream.getAudioTracks()[0];
+        if (newTrack) {
+          if (audioTrack) localStreamRef.current.removeTrack(audioTrack);
+          localStreamRef.current.addTrack(newTrack);
+          audioTrack = newTrack;
+
+          // Replace track on all existing peers
+          Object.values(peersRef.current).forEach(peer => {
+            const sender = peer.getSenders().find(s => s.track && s.track.kind === 'audio');
+            if (sender) {
+              sender.replaceTrack(newTrack);
+            } else {
+              peer.addTrack(newTrack, localStreamRef.current);
+            }
+          });
+
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          setupLocalAudioAnalyzer(localStreamRef.current);
+        }
+      } catch (err) {
+        console.error('Cannot access mic:', err);
+        alert('Could not access microphone. Please check browser microphone permissions.');
+        return;
+      }
+    }
+
+    if (audioTrack) {
       const newMuted = !isAudioMuted;
-      localStreamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !newMuted;
-      });
+      audioTrack.enabled = !newMuted;
       setIsAudioMuted(newMuted);
       socketRef.current?.emit('toggle-audio', { enabled: !newMuted });
     }
   };
 
-  // Toggle Video (Camera On / Off)
-  const toggleVideo = () => {
-    if (localStreamRef.current) {
+  // Toggle Video (Camera On / Off) with dynamic track acquisition if missing
+  const toggleVideo = async () => {
+    if (!localStreamRef.current) return;
+
+    let videoTrack = localStreamRef.current.getVideoTracks()[0];
+
+    // If no video track exists or it is ended, acquire fresh webcam track dynamically
+    if (!videoTrack || videoTrack.readyState === 'ended') {
+      try {
+        const newCamStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user'
+          }
+        });
+        const newTrack = newCamStream.getVideoTracks()[0];
+        if (newTrack) {
+          if (videoTrack) localStreamRef.current.removeTrack(videoTrack);
+          localStreamRef.current.addTrack(newTrack);
+          videoTrack = newTrack;
+
+          // Replace or add track to all existing peers
+          Object.values(peersRef.current).forEach(peer => {
+            const sender = peer.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (sender) {
+              sender.replaceTrack(newTrack);
+            } else {
+              peer.addTrack(newTrack, localStreamRef.current);
+            }
+          });
+
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+        }
+      } catch (err) {
+        console.error('Cannot access camera:', err);
+        alert('Could not access camera. Please check browser camera permissions.');
+        return;
+      }
+    }
+
+    if (videoTrack) {
       const newOff = !isVideoOff;
-      localStreamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = !newOff;
-      });
+      videoTrack.enabled = !newOff;
       setIsVideoOff(newOff);
       socketRef.current?.emit('toggle-video', { enabled: !newOff });
     }
