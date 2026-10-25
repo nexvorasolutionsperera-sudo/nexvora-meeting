@@ -15,8 +15,14 @@ function MainApp() {
   const [currentPage, setCurrentPage] = useState('home'); // 'home' | 'dashboard' | 'admin'
   const [activeMeetingId, setActiveMeetingId] = useState(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authInitialTab, setAuthInitialTab] = useState('login');
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+
+  const handleOpenAuth = (tab = 'login') => {
+    setAuthInitialTab(tab);
+    setAuthModalOpen(true);
+  };
 
   // Check URL query parameters for direct meeting link (e.g. ?meeting=nex-101-202)
   useEffect(() => {
@@ -54,7 +60,7 @@ function MainApp() {
       
       {/* Top Navigation Bar */}
       <Navbar
-        onOpenAuth={() => setAuthModalOpen(true)}
+        onOpenAuth={handleOpenAuth}
         onOpenSettings={() => setSettingsModalOpen(true)}
         onNavigate={(page) => {
           if (page === 'schedule') {
@@ -72,7 +78,7 @@ function MainApp() {
           <Home
             onStartMeeting={handleStartMeeting}
             onOpenSchedule={() => setScheduleModalOpen(true)}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={handleOpenAuth}
             onNavigate={setCurrentPage}
           />
         )}
@@ -92,6 +98,7 @@ function MainApp() {
       {/* Global Modals */}
       <AuthModal
         isOpen={authModalOpen}
+        initialTab={authInitialTab}
         onClose={() => setAuthModalOpen(false)}
       />
 

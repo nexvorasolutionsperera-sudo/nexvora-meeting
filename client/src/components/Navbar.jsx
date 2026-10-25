@@ -198,13 +198,23 @@ export default function Navbar({ onOpenAuth, onOpenSettings, onNavigate, current
               )}
             </div>
           ) : (
-            <button
-              onClick={onOpenAuth}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 active:scale-95 transition-all"
-            >
-              <LogIn className="w-4 h-4" />
-              Sign In
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenAuth('login')}
+                className="px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenAuth('register')}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md shadow-blue-500/20 active:scale-95 transition-all"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign Up Free</span>
+              </button>
+            </div>
           )}
 
         </div>

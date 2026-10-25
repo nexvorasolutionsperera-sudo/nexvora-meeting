@@ -32,8 +32,8 @@ export function AuthProvider({ children }) {
     return res.user;
   };
 
-  const register = async (name, email, password) => {
-    const res = await api.register(name, email, password);
+  const register = async (name, email, password, avatar) => {
+    const res = await api.register(name, email, password, avatar);
     localStorage.setItem('nexvora_token', res.token);
     setToken(res.token);
     setUser(res.user);

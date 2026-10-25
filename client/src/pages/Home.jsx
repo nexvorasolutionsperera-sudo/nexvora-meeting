@@ -86,11 +86,6 @@ export default function Home({ onStartMeeting, onOpenSchedule, onOpenAuth, onNav
               </div>
             </div>
 
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-100 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-semibold mb-4 shadow-sm animate-in fade-in zoom-in duration-300">
-              <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-              <span>Free Zoom Alternative for Video Meetings & Online Classes</span>
-            </div>
-
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-tight">
               Seamless Video Calls,{' '}
               <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-400 bg-clip-text text-transparent">
@@ -101,6 +96,25 @@ export default function Home({ onStartMeeting, onOpenSchedule, onOpenAuth, onNav
             <p className="mt-4 text-base sm:text-lg text-slate-600 dark:text-slate-400 leading-relaxed">
               Connect instantly with HD video, high-clarity audio, screen sharing, live chat, interactive whiteboard, waiting rooms, and host moderation — 100% free with no time limits.
             </p>
+
+            {!isAuthenticated && (
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onOpenAuth('register')}
+                  className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-sm shadow-lg shadow-blue-500/25 active:scale-95 transition-all"
+                >
+                  Create Free Account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenAuth('login')}
+                  className="px-6 py-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold text-sm transition-all"
+                >
+                  Sign In to Account
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Zoom-Style Action Grid */}
@@ -220,7 +234,7 @@ export default function Home({ onStartMeeting, onOpenSchedule, onOpenAuth, onNav
           
           <div className="text-center max-w-2xl mx-auto mb-12">
             <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white">
-              Everything You Love in Zoom, Free & Unlimited
+              Enterprise Video Meetings & Collaborative Classes
             </h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
               Built for educators, teams, and students with robust WebRTC technology and host controls.

@@ -11,37 +11,44 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 // Register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, avatar, role } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' });
     }
 
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+
     const cleanEmail = email.trim().toLowerCase();
 
-    // Check existing
+    // Check existing in MongoDB
     if (isMongoConnected) {
       const existingMongo = await models.User.findOne({ email: cleanEmail });
       if (existingMongo) {
-        return res.status(400).json({ error: 'Email is already registered' });
+        return res.status(400).json({ error: 'This email is already registered. Please sign in.' });
       }
     }
 
     const db = readDb();
     const existing = db.users.find(u => u.email.toLowerCase() === cleanEmail);
     if (existing) {
-      return res.status(400).json({ error: 'Email is already registered' });
+      return res.status(400).json({ error: 'This email is already registered. Please sign in.' });
     }
 
     const randomDigits = Math.floor(100000000 + Math.random() * 900000000).toString();
     const formattedPmi = `${randomDigits.slice(0, 3)}-${randomDigits.slice(3, 6)}-${randomDigits.slice(6, 9)}`;
+
+    const userAvatar = avatar?.trim() || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name.trim())}`;
+    const userRole = (role === 'admin' && cleanEmail.includes('admin')) ? 'admin' : 'user';
 
     const newUser = {
       id: 'usr_' + uuidv4().slice(0, 8),
       name: name.trim(),
       email: cleanEmail,
       passwordHash: bcrypt.hashSync(password, 10),
-      avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name.trim())}`,
-      role: 'user',
+      avatar: userAvatar,
+      role: userRole,
       isBlocked: false,
       pmi: formattedPmi,
       createdAt: new Date().toISOString(),
