@@ -377,6 +377,26 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
       });
 
       // Host Moderation Events
+      socket.on('force-stop-video', () => {
+        if (localStreamRef.current) {
+          const videoTrack = localStreamRef.current.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTrack.enabled = false;
+            try { videoTrack.stop(); } catch (e) {}
+            localStreamRef.current.removeTrack(videoTrack);
+          }
+          Object.values(peersRef.current).forEach(peer => {
+            const sender = peer.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (sender) {
+              try { sender.replaceTrack(null); } catch (e) {}
+            }
+          });
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+        }
+        setIsVideoOff(true);
+        socket.emit('toggle-video', { enabled: false });
+      });
+
       socket.on('force-mute', () => {
         if (localStreamRef.current) {
           localStreamRef.current.getAudioTracks().forEach(t => (t.enabled = false));
@@ -657,29 +677,56 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
     }
   };
 
-  // Toggle Video (Camera On / Off) with dynamic track acquisition if missing
+  // Toggle Video (Camera On / Off) with hardware camera shutdown on off & dynamic acquisition on on
   const toggleVideo = async () => {
     if (!localStreamRef.current) return;
 
     let videoTrack = localStreamRef.current.getVideoTracks()[0];
 
-    // If no video track exists or it is ended, acquire fresh webcam track dynamically
-    if (!videoTrack || videoTrack.readyState === 'ended') {
+    // If video is currently ON, turn it OFF and stop the physical webcam hardware
+    if (!isVideoOff && videoTrack) {
+      try {
+        videoTrack.enabled = false;
+        videoTrack.stop(); // Powers off hardware webcam and turns off camera indicator light
+        localStreamRef.current.removeTrack(videoTrack);
+      } catch (e) {
+        console.warn('Error stopping video track:', e);
+      }
+
+      // Replace with null on all peers so they stop receiving video frames
+      Object.values(peersRef.current).forEach(peer => {
+        const sender = peer.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) {
+          try {
+            sender.replaceTrack(null);
+          } catch (e) {}
+        }
+      });
+
+      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      setIsVideoOff(true);
+      socketRef.current?.emit('toggle-video', { enabled: false });
+      return;
+    }
+
+    // If video is currently OFF, turn it ON by acquiring a fresh webcam track
+    if (isVideoOff || !videoTrack || videoTrack.readyState === 'ended') {
       try {
         const newCamStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: cameraResolution === '1080p' ? 1920 : cameraResolution === '720p' ? 1280 : 640 },
+            height: { ideal: cameraResolution === '1080p' ? 1080 : cameraResolution === '720p' ? 720 : 360 },
             facingMode: 'user'
           }
         });
         const newTrack = newCamStream.getVideoTracks()[0];
         if (newTrack) {
-          if (videoTrack) localStreamRef.current.removeTrack(videoTrack);
+          if (videoTrack) {
+            try { localStreamRef.current.removeTrack(videoTrack); } catch (e) {}
+          }
           localStreamRef.current.addTrack(newTrack);
-          videoTrack = newTrack;
 
-          // Replace or add track to all existing peers
+          // Replace track on all existing peers
           Object.values(peersRef.current).forEach(peer => {
             const sender = peer.getSenders().find(s => s.track && s.track.kind === 'video');
             if (sender) {
@@ -690,19 +737,13 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
           });
 
           setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          setIsVideoOff(false);
+          socketRef.current?.emit('toggle-video', { enabled: true });
         }
       } catch (err) {
         console.error('Cannot access camera:', err);
         alert('Could not access camera. Please check browser camera permissions.');
-        return;
       }
-    }
-
-    if (videoTrack) {
-      const newOff = !isVideoOff;
-      videoTrack.enabled = !newOff;
-      setIsVideoOff(newOff);
-      socketRef.current?.emit('toggle-video', { enabled: !newOff });
     }
   };
 
@@ -789,6 +830,10 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
   // Host Controls
   const handleMuteParticipant = (targetSocketId) => {
     socketRef.current?.emit('mute-participant', { targetSocketId });
+  };
+
+  const handleStopVideoParticipant = (targetSocketId) => {
+    socketRef.current?.emit('stop-video-participant', { targetSocketId });
   };
 
   const handleMuteAll = () => {
@@ -1200,6 +1245,7 @@ export default function MeetingRoom({ meetingId, currentUser, onLeave }) {
           isHost={isHost}
           isCoHost={isCoHost}
           onMuteParticipant={handleMuteParticipant}
+          onStopVideoParticipant={handleStopVideoParticipant}
           onMuteAll={handleMuteAll}
           onRemoveParticipant={handleRemoveParticipant}
           onToggleCoHost={handleToggleCoHost}

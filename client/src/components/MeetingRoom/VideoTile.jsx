@@ -58,8 +58,8 @@ export default function VideoTile({
   }, []);
 
   const hasVideo = isLocal 
-    ? (participant.videoEnabled && stream && stream.getVideoTracks().some(t => t.enabled))
-    : (participant.videoEnabled !== false && stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled !== false));
+    ? (participant.videoEnabled && stream && stream.getVideoTracks().some(t => t.enabled && t.readyState === 'live'))
+    : (participant.videoEnabled === true && stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.readyState === 'live'));
 
   const isSpeaking = participant.isSpeaking;
 

@@ -14,6 +14,7 @@ export default function ParticipantsDrawer({
   isHost,
   isCoHost,
   onMuteParticipant,
+  onStopVideoParticipant,
   onMuteAll,
   onRemoveParticipant,
   onToggleCoHost,
@@ -199,6 +200,16 @@ export default function ParticipantsDrawer({
                           >
                             <VolumeX className="w-3.5 h-3.5 text-amber-500" />
                             Mute Participant
+                          </button>
+                        )}
+
+                        {p.videoEnabled && (
+                          <button
+                            onClick={() => onStopVideoParticipant?.(p.socketId)}
+                            className="w-full text-left px-3 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                          >
+                            <VideoOff className="w-3.5 h-3.5 text-rose-500" />
+                            Stop Video
                           </button>
                         )}
 

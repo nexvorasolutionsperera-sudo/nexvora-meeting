@@ -360,6 +360,26 @@ function setupMeetingSocket(io) {
       }
     });
 
+    // Host Moderation: Stop Video of Individual Participant
+    socket.on('stop-video-participant', ({ targetSocketId }) => {
+      if (!currentMeetingId) return;
+      const room = rooms.get(currentMeetingId);
+      if (!room) return;
+
+      const requester = room.participants.get(socket.id);
+      if (!requester || (!requester.isHost && !requester.isCoHost)) return;
+
+      const target = room.participants.get(targetSocketId);
+      if (target) {
+        target.videoEnabled = false;
+        io.to(targetSocketId).emit('force-stop-video');
+        io.to(`meeting_${currentMeetingId}`).emit('participant-video-change', {
+          socketId: targetSocketId,
+          enabled: false
+        });
+      }
+    });
+
     // Host Moderation: Mute All
     socket.on('mute-all', () => {
       if (!currentMeetingId) return;
